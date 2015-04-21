@@ -1,7 +1,7 @@
 class Circuitbox
   class CircuitBreaker
     attr_accessor :service, :circuit_options, :exceptions, :partition,
-                  :logger, :stat_store, :circuit_store, :notifier
+                  :logger, :circuit_store, :notifier
 
     DEFAULTS = {
       sleep_window:     300,
@@ -31,7 +31,6 @@ class Circuitbox
       @exceptions = [Timeout::Error] if @exceptions.blank?
 
       @logger     = defined?(Rails) ? Rails.logger : Logger.new(STDOUT)
-      @stat_store = options.fetch(:stat_store) { Circuitbox.stat_store }
       @time_class   = options.fetch(:time_class) { Time }
       sanitize_options
     end
@@ -91,26 +90,6 @@ class Circuitbox
       end
     end
 
-    def stats(partition)
-      @partition = partition
-      options = { without_partition: @partition.blank? }
-
-      stats = []
-      end_time = Time.now
-      hour = 48.hours.ago.change(min: 0, sec: 0)
-      while hour <= end_time
-        time_object = hour
-
-        60.times do |i|
-          time = time_object.change(min: i, sec: 0).to_i
-          stats << stats_for_time(time, options) unless time > Time.now.to_i
-        end
-
-        hour += 3600
-      end
-      stats
-    end
-
     def error_rate(failures = failure_count, success = success_count)
       all_count = failures + success
       return 0.0 unless all_count > 0
@@ -118,11 +97,11 @@ class Circuitbox
     end
 
     def failure_count
-      circuit_store.read(stat_storage_key(:failure)).to_i
+      circuit_store.read(count_storage_key(:failure)).to_i
     end
 
     def success_count
-      circuit_store.read(stat_storage_key(:success)).to_i
+      circuit_store.read(count_storage_key(:success)).to_i
     end
 
     def try_close_next_time
@@ -194,11 +173,6 @@ class Circuitbox
     def log_event(event)
       notifier.new(service,partition).notify(event)
       log_event_to_process(event)
-
-      if stat_store.present?
-        log_event_to_stat_store(stat_storage_key(event))
-        log_event_to_stat_store(stat_storage_key(event, without_partition: true))
-      end
     end
 
     def log_metrics(error_rate, failures, successes)
@@ -217,27 +191,18 @@ class Circuitbox
       end
     end
 
-    # When there is a successful response within a stat interval, clear the failures.
+    # When there is a successful response within a count interval, clear the failures.
     def clear_failures!
-      circuit_store.write(stat_storage_key(:failure), 0, raw: true)
+      circuit_store.write(count_storage_key(:failure), 0, raw: true)
     end
 
     # Logs to process memory.
     def log_event_to_process(event)
-      key = stat_storage_key(event)
+      key = count_storage_key(event)
       if circuit_store.read(key, raw: true)
         circuit_store.increment(key)
       else
         circuit_store.write(key, 1, raw: true)
-      end
-    end
-
-    # Logs to Memcache.
-    def log_event_to_stat_store(key)
-      if stat_store.read(key, raw: true)
-        stat_store.increment(key)
-      else
-        stat_store.write(key, 1, raw: true)
       end
     end
 
@@ -246,9 +211,10 @@ class Circuitbox
       Digest::SHA1.hexdigest(storage_key(:cache, args.inspect.to_s))
     end
 
-    def stat_storage_key(event, options = {})
-      storage_key(:stats, align_time_on_minute, event, options)
+    def count_storage_key(event, options = {})
+      storage_key(:count, align_time_on_minute, event, options)
     end
+
 
     # return time representation in seconds
     def align_time_on_minute(time=nil)
@@ -277,12 +243,5 @@ class Circuitbox
       Circuitbox.reset
     end
 
-    def stats_for_time(time, options = {})
-      stats = { time: align_time_on_minute(time) }
-      [:success, :failure, :open].each do |event|
-        stats[event] = stat_store.read(storage_key(:stats, time, event, options), raw: true) || 0
-      end
-      stats
-    end
   end
 end
