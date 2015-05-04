@@ -57,6 +57,15 @@ class CircuitBreakerTest < Minitest::Test
       assert_equal 6, run_counter, 'the circuit did not open after 6 failures (5 failures + 10%)'
     end
 
+    it 'opens the circuit on passing volume threshold' do
+      @circuit.expects(:open!)
+      6.times do
+        @circuit.run do
+          raise RequestFailureError
+        end
+      end
+    end
+
     it 'keep circuit closed on 0% failure' do
       run_counter = 0
       10.times do

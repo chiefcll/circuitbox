@@ -65,7 +65,7 @@ class Circuitbox
         rescue *exceptions => exception
           logger.debug "[CIRCUIT] closed: detected #{service} failure"
           failure!
-          open! if half_open?
+          open! if half_open? || (open? && !open_flag?)
           raise Circuitbox::ServiceFailureError.new(service, exception)
         end
       end
